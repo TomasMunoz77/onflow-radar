@@ -125,18 +125,29 @@ def escribir(abiertas, cache, listado, ahora):
 def main():
     ahora = datetime.now(CHILE).replace(tzinfo=None)
 
-    def pagina_n(n):
+    # La API corta en 10.000 resultados por consulta: se pide región por región (1-16).
+    def pagina(args):
+        reg, n = args
         time.sleep(PAUSA)
-        return get(f"{BASE}?estado=publicada&tamano_pagina=50&numero_pagina={n}").get("payload") or {}
+        return get(f"{BASE}?estado=publicada&tamano_pagina=50&numero_pagina={n}&region={reg}").get("payload") or {}
 
-    p1 = pagina_n(1)
-    total_pag = (p1.get("paginacion") or {}).get("total_paginas") or 1
-    listado = list(p1.get("items") or [])
+    vistos = {}
     with ThreadPoolExecutor(HILOS) as ex:
-        for i, p in enumerate(ex.map(pagina_n, range(2, total_pag + 1)), 2):
-            listado += p.get("items") or []
+        primeras = list(ex.map(pagina, [(r, 1) for r in range(1, 17)]))
+        resto = []
+        for r, p1 in zip(range(1, 17), primeras):
+            for it in p1.get("items") or []:
+                vistos[it["codigo"]] = it
+            tp = (p1.get("paginacion") or {}).get("total_paginas") or 1
+            if (p1.get("paginacion") or {}).get("total_resultados", 0) >= 10000:
+                print(f"AVISO: region {r} llega al tope de 10.000", flush=True)
+            resto += [(r, n) for n in range(2, tp + 1)]
+        for i, p in enumerate(ex.map(pagina, resto), 1):
+            for it in p.get("items") or []:
+                vistos[it["codigo"]] = it
             if i % 25 == 0:
-                print(f"pagina {i}/{total_pag}: {len(listado)}", flush=True)
+                print(f"pagina {i}/{len(resto)}: {len(vistos)}", flush=True)
+    listado = list(vistos.values())
 
     abiertas = {}
     for it in listado:
