@@ -1,0 +1,75 @@
+name: Radar Compra Agil
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # cada hora (UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: radar
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recuperar detalle ya descargado
+        uses: actions/cache/restore@v4
+        with:
+          path: datos/detalle_cache.json
+          key: detalle-${{ github.run_id }}
+          restore-keys: detalle-
+
+      - name: Descargar Compra Agil abiertas
+        env:
+          MP_TICKET: ${{ secrets.MP_TICKET }}
+          OUT_DIR: datos
+          MAX_DETALLE: "2500"
+          PYTHONIOENCODING: utf-8
+        run: python -u scripts/radar_compra_agil.py
+
+      - name: Guardar detalle para la proxima corrida
+        if: always() && hashFiles('datos/detalle_cache.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: datos/detalle_cache.json
+          key: detalle-${{ github.run_id }}
+
+      - name: Armar sitio
+        run: cp datos/radar.json datos/meta.json site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      # GitHub pausa las tareas programadas de repos sin commits por 60 dias:
+      # un commit semanal mantiene viva la tarea.
+      - name: Mantener activa la tarea programada
+        run: |
+          SEMANA=$(date -u +%G-W%V)
+          if [ "$(cat .ultima-semana 2>/dev/null)" != "$SEMANA" ]; then
+            echo "$SEMANA" > .ultima-semana
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .ultima-semana
+            git commit -m "Mantener activa la tarea ($SEMANA)"
+            git push
+          fi
